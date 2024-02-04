@@ -1,0 +1,96 @@
+%风光总功率
+Power_All_WindPV=Power_Wind+Power_PV;
+
+%初始化储能系统SOC
+Capacity_Battery_0=zeros(N,24);%电池储能
+Capacity_HT_0=zeros(N,24);%储氢
+% Battery_all=[Battery_1+2+...+20]；
+
+%储能系统初始时间段赋值
+Capacity_Battery_0(:,1)=0.9;%0点时电池SOC为90%
+Capacity_HT_0(:,1)=0.5;%0点时储氢罐有50%氢气
+
+
+
+%未来价值竞争策略,收益初始化
+Earning_Hydrogen=zeros(1,24);%风光供制氢预计收益
+Earning_Battery=zeros(1,24);%风光供电池储能预计收益
+Earning_Sell=zeros(1,24);%风光供用户充电预计收益
+
+%未来价值竞争策略过程中计算的风光分配功率
+P_Hydrogen=zeros(1,24);%风光分配给制氢的预计电量
+P_Battery=zeros(1,24);%风光分配给电池储能的预计电量
+P_ChargeSell=zeros(1,24);%风光分配给用户充电的预计电量
+
+
+%初始化变量
+Earning=zeros(1,24);
+E_Co2So2Nox=zeros(1,24);
+Batteryloss=zeros(1,24);
+
+
+%各时段负荷需求
+Load_EV=EV_Charging*(1-EV_Chargefirst_SOC)*Battery_capacity+EV_Changing*(1-EV_swapfirst_SOC)*Battery_capacity;%电动汽车充换电负荷需求
+Load_HV=HV_Charging.*(1-HV_Chargefirst_SOC)*HV_capacity;%氢汽车加氢负荷需求
+
+% Capacity_Battery_1()=PopDec_EV();
+% Capacity_HT_1()=PopDec_HV();
+
+
+for i=1:N
+    for j=1:D/2
+        %FVCS
+        %计算氢储能、电池储能系统可充电SOC状态
+        Battery_surplus=Battery_capacity*Battery_sum*0.9-Capacity_Battery_0(:,j)*Battery_sum*Battery_capacity;%单块电池容量*电池数量-当前时段电池SOC*单块电池容量*电池数量
+        Hydrogen_surplus=(1-Capacity_HT_0(:,j))*HT_capacity/Hydrogen;%1-储氢系统当前SOC
+        All_surplus=Battery_surplus+Hydrogen_surplus;
+        %计算未来价值竞争策略中的收益值
+        Earning_Battery(:,j)=0.9*Price_Discharge(:,j)-(2*Kw/Battery_capacity)*Battery_price;%电池储能预计收益，算一次充电一次放电
+        Earning_Hydrogen(:,j)=0.9*0.0177*0.999*Price_Hydrogen;%制氢预计收益，逆变器效率均为90%
+        Earning_Sell(:,j)=0.9*Price_Sell(:,j);%用户充电预计收益 
+        %计算风光功率分配值
+        if Power_All_WindPV(:,j) >= All_surplus
+            P_Hydrogen(:,j)=Battery_surplus(i,:);%风光实际分配给制氢的电量
+            P_Battery(:,j)=Hydrogen_surplus(i,:);%风光实际分配给电池储能的电量
+            P_ChargeSell(:,j)=Power_All_WindPV(:,j)-All_surplus(i,:);%风光实际分配给用户充电的电量
+        else
+            P_Hydrogen(:,j)=Power_All_WindPV(:,j)*(Earning_Hydrogen(:,j)/(Earning_Hydrogen(:,j)+Earning_Battery(:,j)));%风光实际分配给制氢的电量
+            P_Battery(:,j)=Power_All_WindPV(:,j)*(Earning_Battery(:,j)/(Earning_Hydrogen(:,j)+Earning_Battery(:,j)));%风光实际分配给电池储能的电量
+            P_ChargeSell(:,j)=0;%风光实际分配给用户充电的电量
+        end
+
+        %风光分配后各时段储能系统初始容量
+        Capacity_Battery_0(:,j)=Capacity_Battery_0(:,j)+P_Battery(:,j);
+        Capacity_HT_0(:,j)=Capacity_HT_0(:,j)+P_Battery(:,j)*Hydrogen/HT_capacity;
+        %低电价
+%             if Price_Charge(:,i) == 0.3508
+                %电池储能系统收益
+                if (Capacity_Battery_0(i,j)-Capacity_Battery_1(i,j))*Battery_system < Load_EV(:,j)
+                    Earning_EV(i,j)=Load_EV(:,j)*Price_Sell(:,j)+((Capacity_Battery_0(i,j)-Capacity_Battery_1(i,j))*Battery_system-Load_EV(:,j))*Price_Charge(:,j);
+                    E_Co2So2Nox_EV(i,j)=(-1)*((Capacity_Battery_0(i,j)-Capacity_Battery_1(i,j))*Battery_system-Load_EV(:,j))*Co2So2Nox;
+                    Battteryloss(i,j)=((((Capacity_Battery_0(i,j)-Capacity_Battery_1(i,j))*Battery_system-Load_EV(:,j))*(-1)+P_Battery(:,j))*Kw)/Battery_capacity*Battery_price;%(购电量+风光输入)*Kw
+                elseif (Capacity_Battery_0(i,j)-Capacity_Battery_1(i,j))*Battery_system == Load_EV(:,j)
+                    Earning_EV(i,j)=Load_EV(:,j)*Price_Sell(:,j);
+                    E_Co2So2Nox_EV(i,j)=0;
+                    Battteryloss(i,j)=((Load_EV(:,j)+P_Battery(:,j))*Kw)/Battery_capacity*Battery_price;
+                elseif (Capacity_Battery_0(i,j)-Capacity_Battery_1(i,j))*Battery_system > Load_EV(:,j)  
+                    Earning_EV(i,j)=Load_EV(:,j)*Price_Sell(:,j)+((Capacity_Battery_0(i,j)-Capacity_Battery_1(i,j))*Battery_system-Load_EV(:,j))*Price_Discharge(:,j);
+                    E_Co2So2Nox_EV(i,j)=0;
+                    Battteryloss(i,j)=((P_Battery(:,j)+((Capacity_Battery_0(i,j)-Capacity_Battery_1(i,j))*Battery_system))*Kw)/Battery_capacity*Battery_price;
+                end
+                %储氢系统收益
+                if (Capacity_HT_0(i,j)-Capacity_HT_1(i,j))*HT_capacity > Load_HV(:,j)
+                    Earning_HV(i,j)=Load_HV(:,j)*Price_Hydrogen;
+                    Capacity_HT_1(i,j)=Capacity_HT_0(i,j)-(Load_HV(:,j)/HT_capacity);
+                    E_Co2So2Nox_HV(i,j)=0;
+                elseif (Capacity_HT_0(i,j)-Capacity_HT_1(i,j))*HT_capacity == Load_HV(:,j)
+                    Earning_HV(i,j)=Load_HV(:,j)*Price_Hydrogen;
+                    E_Co2So2Nox_HV(i,j)=0;
+                elseif (Capacity_HT_0(i,j)-Capacity_HT_1(i,j))*HT_capacity < Load_HV(:,j)
+                    Earning_HV(i,j)=Load_HV(:,j)*Price_Hydrogen+((Capacity_HT_0(i,j)-Capacity_HT_1(i,j))*HT_capacity-Load_HV(:,j))/Hydrogen*Price_Charge(:,j);
+                    E_Co2So2Nox_HV(i,j)=((Capacity_HT_0(i,j)-Capacity_HT_1(i,j))*HT_capacity-Load_HV(:,j))/Hydrogen*(-1)*Co2So2Nox;
+                end      
+        
+    end
+
+end
